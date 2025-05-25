@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DASH Video Player with Metrics</title>
+    <script src="dash.all.min.js"></script>
+    <script src="chart.min.js"></script>
+    <style>
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        .code {
+            margin: 10px 0;
+            text-align: center;
+        }
+        .chart-container {
+            width: 600px;
+            margin: 20px 0;
+        }
+        video {
+            width: 640px;
+            height: auto;
+            max-width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="code">
+            <video class="dashjs-player" autoplay controls preload="auto" muted loop></video>
+        </div>
+        <div class="code">
+            <p>Video Bitrate: <span id="bitrate"></span> kbps</p>
+            <p>Video Buffer: <span id="buffer"></span> seconds</p>
+            <p>Video Representation: <span id="representation"></span></p>
+        </div>
+        <div class="chart-container">
+            <canvas id="bitrateChart"></canvas>
+        </div>
+        <div class="chart-container">
+            <canvas id="bufferChart"></canvas>
+        </div>
+        <div class="chart-container">
+            <canvas id="combinedChart"></canvas>
+        </div>
+    </div>
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+            init();
+        });
+
+        function init() {
+            var video = document.querySelector("video");
+            var player = dashjs.MediaPlayer().create();
+            var mpd_url = "./output/stream.mpd";
+            player.initialize(video, mpd_url, true);
+
+            var bitrateData = [];
+            var bufferData = [];
+            var timeData = [];
+            var maxDataPoints = 100;
+
+            var bitrateChart = new Chart(document.getElementById("bitrateChart"), {
+                type: 'line',
+                data: {
+                    labels: timeData,
+                    datasets: [{
+                        label: 'Bitrate (kbps)',
+                        data: bitrateData,
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        fill: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: { title: { display: true, text: 'Time (s)' } },
+                        y: { title: { display: true, text: 'Bitrate (kbps)' }, beginAtZero: true }
+                    }
+                }
+            });
+
+            var bufferChart = new Chart(document.getElementById("bufferChart"), {
+                type: 'line',
+                data: {
+                    labels: timeData,
+                    datasets: [{
+                        label: 'Buffer Level (s)',
+                        data: bufferData,
+                        borderColor: 'rgba(255, 99, 132, 1)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                        fill: true,
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: { title: { display: true, text: 'Time (s)' } },
+                        y: { title: { display: true, text: 'Buffer (s)' }, beginAtZero: true }
+                    }
+                }
+            });
+
+            var combinedChart = new Chart(document.getElementById("combinedChart"), {
+                type: 'line',
+                data: {
+                    labels: timeData,
+                    datasets: [
+                        {
+                            label: 'Buffer Level',
+                            data: bufferData,
+                            borderColor: 'rgba(255, 105, 180, 1)',
+                            backgroundColor: 'rgba(255, 105, 180, 0.2)',
+                            fill: true,
+                            tension: 0.4,
+                            yAxisID: 'y-buffer'
+                        },
+                        {
+                            label: 'Bitrate',
+                            data: bitrateData,
+                            borderColor: 'rgba(0, 0, 255, 1)',
+                            backgroundColor: 'rgba(0, 0, 255, 0.2)',
+                            fill: true,
+                            tension: 0.4, 
+                            yAxisID: 'y-bitrate'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: { title: { display: true, text: 'Time (s)' } },
+                        'y-buffer': {
+                            type: 'linear',
+                            position: 'left',
+                            title: { display: true, text: 'Buffer (s)' },
+                            beginAtZero: true,
+                            suggestedMax: 15 
+                        },
+                        'y-bitrate': {
+                            type: 'linear',
+                            position: 'right',
+                            title: { display: true, text: 'Bit kbps)' },
+                            beginAtZero: true,
+                            suggestedMax: 3000
+                        }
+                    }
+                }
+            });
+
+            var startTime = Date.now();
+            var eventPoller = setInterval(function() {
+                var streamInfo = player.getActiveStream()?.getStreamInfo();
+                var dashMetrics = player.getDashMetrics();
+                var dashAdapter = player.getDashAdapter();
+
+                if (dashMetrics && streamInfo) {
+                    const periodIdx = streamInfo.index;
+                    var repSwitch = dashMetrics.getCurrentRepresentationSwitch('video', true);
+                    var bufferLevel = dashMetrics.getCurrentBufferLevel('video', true);
+                    var bitrate = repSwitch && repSwitch.to ? Math.round(dashAdapter.getBandwidthForRepresentation(repSwitch.to, periodIdx) / 1000) : NaN;
+
+                    document.getElementById("buffer").innerText = bufferLevel + " secs";
+                    document.getElementById("bitrate").innerText = bitrate + " kbps";
+                    document.getElementById("representation").innerText = repSwitch ? repSwitch.to : "N/A";
+
+                    var currentTime = (Date.now() - startTime) / 1000;
+                    timeData.push(currentTime.toFixed(2));
+                    bitrateData.push(bitrate);
+                    bufferData.push(bufferLevel);
+
+                    if (timeData.length > maxDataPoints) {
+                        timeData.shift();
+                        bitrateData.shift();
+                        bufferData.shift();
+                    }
+
+                    bitrateChart.data.labels = timeData;
+                    bitrateChart.data.datasets[0].data = bitrateData;
+                    bufferChart.data.labels = timeData;
+                    bufferChart.data.datasets[0].data = bufferData;
+                    combinedChart.data.labels = timeData;
+                    combinedChart.data.datasets[0].data = bufferData;
+                    combinedChart.data.datasets[1].data = bitrateData; 
+                    bitrateChart.update();
+                    bufferChart.update();
+                    combinedChart.update();
+                }
+            }, 500);
+
+            player.on(dashjs.MediaPlayer.events["PLAYBACK_ENDED"], function() {
+            });
+        }
+    </script>
+</body>
+</html>
